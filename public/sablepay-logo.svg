@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300" fill="none">
+  <defs>
+    <linearGradient id="sGrad" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0%" stop-color="#42A5F5"/>
+      <stop offset="50%" stop-color="#7C4DFF"/>
+      <stop offset="100%" stop-color="#AB47BC"/>
+    </linearGradient>
+  </defs>
+  <!-- Top curve of S -->
+  <path d="
+    M145,15
+    C185,15 210,50 210,85
+    C210,125 180,150 140,160
+    L80,175
+    C55,181 40,200 40,220
+    C40,245 60,270 95,270
+    L100,270
+  " stroke="url(#sGrad)" stroke-width="48" stroke-linecap="round" fill="none"
+    transform="translate(-10, 10) scale(0.92)"
+  />
+  <!-- Make it look like a proper S with rounded ends -->
+  <path d="
+    M60,285
+    C20,285 -10,250 -10,215
+    C-10,175 20,150 60,140
+    L120,125
+    C145,119 160,100 160,80
+    C160,55 140,30 105,30
+    L100,30
+  " stroke="url(#sGrad)" stroke-width="48" stroke-linecap="round" fill="none"
+    transform="translate(10, -5) scale(0.92)"
+  />
+</svg>
