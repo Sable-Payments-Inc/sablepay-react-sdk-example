@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useCallback } from 'react';
-import { SablePay, PaymentStatusResponse } from '@sablepay/sdk';
+import { SablePay, PaymentStatusResponse } from '@sablepay/react-sablepay-js';
 import { useSablePayContext } from '@/providers/SablePayAppProvider';
 
 export default function PaymentStatusPage() {

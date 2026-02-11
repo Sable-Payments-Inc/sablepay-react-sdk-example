@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useCallback } from 'react';
-import { SablePay, CreatePaymentRequest, CreatePaymentResponse, PaymentStatusResponse, PaymentItem, isCompleted, isFailed, isExpired, isPending, QrCodeGenerator } from '@sablepay/sdk';
+import { SablePay, CreatePaymentRequest, CreatePaymentResponse, PaymentStatusResponse, PaymentItem, isCompleted, isFailed, isExpired, isPending, QrCodeGenerator } from '@sablepay/react-sablepay-js';
 import { useSablePayContext } from '@/providers/SablePayAppProvider';
 
 interface MenuItem {

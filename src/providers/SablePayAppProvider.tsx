@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { SablePay } from '@sablepay/sdk';
+import { SablePay } from '@sablepay/react-sablepay-js';
 
 interface SablePayConfig {
   apiKey: string;
@@ -30,15 +30,15 @@ export function SablePayAppProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   const config: SablePayConfig = {
-    apiKey: process.env. PUBLIC_SABLEPAY_API_KEY || '',
+    apiKey: process.env.PUBLIC_SABLEPAY_API_KEY || '',
     merchantId: process.env.PUBLIC_SABLEPAY_MERCHANT_ID || '',
-    baseUrl: process.env.NEXT_PUBLIC_SABLEPAY_BASE_URL || '',
+    baseUrl: process.env.PUBLIC_SABLEPAY_BASE_URL || '',
   };
 
   useEffect(() => {
     if (!config.apiKey || !config.merchantId || !config.baseUrl) {
       setError(
-        'Missing configuration. Please create a .env.local file with  PUBLIC_SABLEPAY_API_KEY, PUBLIC_SABLEPAY_MERCHANT_ID, and NEXT_PUBLIC_SABLEPAY_BASE_URL.'
+        'Missing configuration. Please create a .env.local file with  PUBLIC_SABLEPAY_API_KEY, PUBLIC_SABLEPAY_MERCHANT_ID, and PUBLIC_SABLEPAY_BASE_URL.'
       );
       return;
     }
