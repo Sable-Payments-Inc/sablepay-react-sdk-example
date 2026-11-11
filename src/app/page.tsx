@@ -1,7 +1,14 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
-import { SablePay, CreatePaymentRequest, CreatePaymentResponse, PaymentStatusResponse, PaymentItem, isCompleted, isFailed, isExpired, isPending, QrCodeGenerator } from '@sablepay/react-sablepay-js';
+import React, { useState, useEffect } from 'react';
+import {
+  SablePay,
+  CreatePaymentRequest,
+  PaymentItem,
+  PaymentResult,
+  PaymentFlowError,
+  PaymentFlowErrorType,
+} from '@sablepay/react-sablepay-js';
 import { useSablePayContext } from '@/providers/SablePayAppProvider';
 
 interface MenuItem {
@@ -19,17 +26,23 @@ const MENU: MenuItem[] = [
   { name: 'Cookie', emoji: '🍪', price: 1 },
 ];
 
-type Step = 'menu' | 'creating' | 'qr' | 'polling' | 'success' | 'failed';
+type Step = 'menu' | 'paying' | 'success' | 'failed';
+
+/** The SDK reports a user-closed payment window as an UNKNOWN error with this message. */
+const isUserCancel = (err: PaymentFlowError) =>
+  err.type === PaymentFlowErrorType.UNKNOWN && err.message === 'Payment cancelled';
 
 export default function CoffeeShopPage() {
   const { isInitialized, error: initError } = useSablePayContext();
 
   const [selected, setSelected] = useState<Map<string, number>>(new Map());
   const [step, setStep] = useState<Step>('menu');
-  const [payment, setPayment] = useState<CreatePaymentResponse | null>(null);
-  const [status, setStatus] = useState<PaymentStatusResponse | null>(null);
-  const [qrUrl, setQrUrl] = useState<string>('');
-  const [error, setError] = useState<string>('');
+  const [paymentId, setPaymentId] = useState<string>('');
+  const [result, setResult] = useState<PaymentResult | null>(null);
+  const [failure, setFailure] = useState<PaymentFlowError | null>(null);
+
+  // Close any open payment window if the user navigates away.
+  useEffect(() => () => SablePay.cancelPayment(), []);
 
   const totalAmount = Array.from(selected.entries()).reduce(
     (sum, [name, qty]) => {
@@ -51,232 +64,173 @@ export default function CoffeeShopPage() {
     });
   };
 
-  const createPayment = useCallback(async () => {
+  const startPayment = () => {
     if (totalAmount === 0) return;
-    setStep('creating');
-    setError('');
 
-    try {
-      const sablePay = SablePay.getInstance();
+    const items: PaymentItem[] = Array.from(selected.entries()).map(([name, qty]) => {
+      const menuItem = MENU.find((m) => m.name === name)!;
+      return { name: menuItem.name, quantity: qty, price: menuItem.price };
+    });
 
-      const items: PaymentItem[] = Array.from(selected.entries()).map(
-        ([name, qty]) => {
-          const menuItem = MENU.find((m) => m.name === name)!;
-          return {
-            name: menuItem.name,
-            quantity: qty,
-            amount: menuItem.price,
-          };
-        }
-      );
-
-      const request: CreatePaymentRequest = {
-        amount: totalAmount,
-        items,
-        metadata: { source: 'example-app-coffee-shop' },
-      };
-
-      const response = await sablePay.createPayment(request);
-      setPayment(response);
-
-      // Generate QR code
-      const qrGen = new QrCodeGenerator();
-      const dataUrl = await qrGen.generatePaymentQr(response, {
-        width: 280,
-      });
-      setQrUrl(dataUrl || '');
-      setStep('qr');
-
-      // Start polling
-      pollStatus(response.paymentId);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
-      setStep('failed');
-    }
-  }, [totalAmount, selected]);
-
-  const pollStatus = async (paymentId: string) => {
-    setStep('qr');
-    const sablePay = SablePay.getInstance();
-
-    const poll = async () => {
-      try {
-        const statusResp = await sablePay.getPaymentStatus(paymentId);
-        setStatus(statusResp);
-
-        if (isCompleted(statusResp.status)) {
-          setStep('success');
-          return;
-        }
-        if (isFailed(statusResp.status) || isExpired(statusResp.status)) {
-          setStep('failed');
-          return;
-        }
-        // Still pending — poll again
-        setTimeout(poll, 3000);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setError(msg);
-        setStep('failed');
-      }
+    const request: CreatePaymentRequest = {
+      amount: totalAmount,
+      items,
+      metadata: { source: 'example-app-coffee-shop' },
     };
 
-    poll();
+    setStep('paying');
+    setFailure(null);
+    setResult(null);
+
+    // The SDK opens its own payment window (QR code, countdown, status polling)
+    // and reports the outcome through these callbacks.
+    SablePay.launchPayment(request, {
+      onPaymentCreated: (response) => setPaymentId(response.paymentId),
+      onSuccess: (res) => {
+        setResult(res);
+        setStep('success');
+      },
+      onFailure: (err) => {
+        if (isUserCancel(err)) {
+          setStep('menu');
+          return;
+        }
+        setFailure(err);
+        setStep('failed');
+      },
+    });
   };
 
   const reset = () => {
+    SablePay.cancelPayment();
     setSelected(new Map());
     setStep('menu');
-    setPayment(null);
-    setStatus(null);
-    setQrUrl('');
-    setError('');
+    setPaymentId('');
+    setResult(null);
+    setFailure(null);
   };
 
   if (initError) {
     return <div className="config-warning">{initError}</div>;
   }
 
+  const currency = result?.currency_symbol || '$';
+
   return (
-    <>
-      <div className="card">
-        <h2 className="card-title">☕ Coffee Shop POS</h2>
+    <div className="card">
+      <h2 className="card-title">☕ Coffee Shop POS</h2>
 
-        {step === 'menu' && (
-          <>
-            <div className="menu-grid">
-              {MENU.map((item) => (
-                <div
-                  key={item.name}
-                  className={`menu-item ${selected.has(item.name) ? 'selected' : ''}`}
-                  onClick={() => toggleItem(item.name)}
-                >
-                  <span className="emoji">{item.emoji}</span>
-                  <span className="name">{item.name}</span>
-                  <span className="price">${item.price.toFixed(2)}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="order-summary">
-              <div>
-                <div className="order-label">Order Total</div>
-                <div className="order-total">${totalAmount.toFixed(2)}</div>
+      {step === 'menu' && (
+        <>
+          <div className="menu-grid">
+            {MENU.map((item) => (
+              <div
+                key={item.name}
+                className={`menu-item ${selected.has(item.name) ? 'selected' : ''}`}
+                onClick={() => toggleItem(item.name)}
+              >
+                <span className="emoji">{item.emoji}</span>
+                <span className="name">{item.name}</span>
+                <span className="price">${item.price.toFixed(2)}</span>
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                {selected.size} item{selected.size !== 1 ? 's' : ''}
-              </div>
+            ))}
+          </div>
+
+          <div className="order-summary">
+            <div>
+              <div className="order-label">Order Total</div>
+              <div className="order-total">${totalAmount.toFixed(2)}</div>
             </div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+              {selected.size} item{selected.size !== 1 ? 's' : ''}
+            </div>
+          </div>
 
-            <button
-              className="btn btn-primary"
-              disabled={totalAmount === 0 || !isInitialized}
-              onClick={createPayment}
-            >
-              Create Payment
-            </button>
-          </>
-        )}
+          <button
+            className="btn btn-primary"
+            disabled={totalAmount === 0 || !isInitialized}
+            onClick={startPayment}
+          >
+            Pay with SablePay
+          </button>
+        </>
+      )}
 
-        {step === 'creating' && (
-          <div style={{ textAlign: 'center', padding: 40 }}>
-            <div className="spinner dark large" />
-            <p style={{ marginTop: 16, color: 'var(--text-secondary)' }}>
-              Creating payment…
+      {step === 'paying' && (
+        <div className="payment-result">
+          <div className="amount">${totalAmount.toFixed(2)}</div>
+          <div className="status pending">Awaiting Payment</div>
+          {paymentId && <div className="payment-id">ID: {paymentId}</div>}
+          <div style={{ marginTop: 12 }}>
+            <div className="spinner dark" style={{ marginRight: 8 }} />
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+              Complete the payment in the SablePay window…
+            </span>
+          </div>
+          <button className="btn btn-secondary btn-small" onClick={reset} style={{ marginTop: 20 }}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {step === 'success' && result && (
+        <div className="payment-result">
+          <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
+          <div className="amount">{currency}{result.amount.toFixed(2)}</div>
+          <div className="status completed">Payment Completed</div>
+          <div className="payment-id">ID: {result.paymentId}</div>
+
+          <div className="status-details">
+            {result.paidAmount != null && (
+              <div className="status-row">
+                <span className="label">Paid Amount</span>
+                <span className="value success">{result.paidAmount}</span>
+              </div>
+            )}
+            {result.paidToken && (
+              <div className="status-row">
+                <span className="label">Paid Token</span>
+                <span className="value">{result.paidToken}</span>
+              </div>
+            )}
+            {result.paidNetwork && (
+              <div className="status-row">
+                <span className="label">Network</span>
+                <span className="value">{result.paidNetwork}</span>
+              </div>
+            )}
+            {result.transactionHash && (
+              <div className="status-row">
+                <span className="label">Tx Hash</span>
+                <span className="value">{result.transactionHash}</span>
+              </div>
+            )}
+          </div>
+
+          <button className="btn btn-primary" onClick={reset} style={{ marginTop: 20 }}>
+            New Order
+          </button>
+        </div>
+      )}
+
+      {step === 'failed' && (
+        <div className="payment-result">
+          <div style={{ fontSize: 48, marginBottom: 12 }}>❌</div>
+          <div className="amount">${totalAmount.toFixed(2)}</div>
+          <div className="status failed">
+            {failure?.type === PaymentFlowErrorType.PAYMENT_EXPIRED ? 'Payment Expired' : 'Payment Failed'}
+          </div>
+          {failure?.paymentId && <div className="payment-id">ID: {failure.paymentId}</div>}
+          {failure?.message && (
+            <p style={{ color: 'var(--error)', fontSize: 14, marginTop: 12 }}>
+              {failure.message}
             </p>
-          </div>
-        )}
-
-        {(step === 'qr' || step === 'polling') && payment && (
-          <div className="payment-result">
-            <div className="amount">${totalAmount.toFixed(2)}</div>
-            <div className="status pending">Awaiting Payment</div>
-            <div className="payment-id">ID: {payment.paymentId}</div>
-
-            {qrUrl && (
-              <div className="qr-container">
-                <img src={qrUrl} alt="Payment QR Code" width={280} height={280} />
-
-                {/* SablePay Branding — below QR */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 16 }}>
-                  <img src="/sablePayLogo.png" alt="SablePay" width={32} height={32} />
-                  <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.3px' }}>SablePay</span>
-                </div>
-
-                <span className="scan-label">
-                  Scan to pay · Polling for confirmation…
-                </span>
-              </div>
-            )}
-
-            <div style={{ marginTop: 12 }}>
-              <div className="spinner dark" style={{ marginRight: 8 }} />
-              <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                Checking status…
-              </span>
-            </div>
-
-            <button className="btn btn-secondary btn-small" onClick={reset} style={{ marginTop: 20 }}>
-              Cancel
-            </button>
-          </div>
-        )}
-
-        {step === 'success' && (
-          <div className="payment-result">
-            <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
-            <div className="amount">${totalAmount.toFixed(2)}</div>
-            <div className="status completed">Payment Completed</div>
-            {payment && <div className="payment-id">ID: {payment.paymentId}</div>}
-
-            {status && (
-              <div className="status-details">
-                {/* {status.txHash && (
-                  <div className="status-row">
-                    <span className="label">Tx Hash</span>
-                    <span className="value">{status.txHash}</span>
-                  </div>
-                )}
-                {status.paidToken && (
-                  <div className="status-row">
-                    <span className="label">Paid Token</span>
-                    <span className="value">{status.paidToken}</span>
-                  </div>
-                )}
-                {status.paidAmount !== undefined && (
-                  <div className="status-row">
-                    <span className="label">Paid Amount</span>
-                    <span className="value success">${status.paidAmount}</span>
-                  </div>
-                )} */}
-              </div>
-            )}
-
-            <button className="btn btn-primary" onClick={reset} style={{ marginTop: 20 }}>
-              New Order
-            </button>
-          </div>
-        )}
-
-        {step === 'failed' && (
-          <div className="payment-result">
-            <div style={{ fontSize: 48, marginBottom: 12 }}>❌</div>
-            <div className="amount">${totalAmount.toFixed(2)}</div>
-            <div className="status failed">
-              {status && isExpired(status.status) ? 'Payment Expired' : 'Payment Failed'}
-            </div>
-            {error && (
-              <p style={{ color: 'var(--error)', fontSize: 14, marginTop: 12 }}>
-                {error}
-              </p>
-            )}
-            <button className="btn btn-primary" onClick={reset} style={{ marginTop: 20 }}>
-              Try Again
-            </button>
-          </div>
-        )}
-      </div>
-    </>
+          )}
+          <button className="btn btn-primary" onClick={reset} style={{ marginTop: 20 }}>
+            Try Again
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

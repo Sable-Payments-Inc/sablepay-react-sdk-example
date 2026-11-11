@@ -1,8 +1,25 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
-import { SablePay, PaymentStatusResponse } from '@sablepay/react-sablepay-js';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import {
+  SablePay,
+  PaymentPoller,
+  PaymentStatusResponse,
+  isCompleted,
+  isFailed,
+  isExpired,
+  isTerminal,
+} from '@sablepay/react-sablepay-js';
 import { useSablePayContext } from '@/providers/SablePayAppProvider';
+
+const getStatusColor = (s: string | undefined): string => {
+  if (!s) return '';
+  if (isCompleted(s)) return 'success';
+  if (isFailed(s) || isExpired(s)) return 'error';
+  return 'warning';
+};
+
+const formatDate = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString() : null);
 
 export default function PaymentStatusPage() {
   const { isInitialized, error: initError } = useSablePayContext();
@@ -12,69 +29,79 @@ export default function PaymentStatusPage() {
   const [status, setStatus] = useState<PaymentStatusResponse | null>(null);
   const [error, setError] = useState<string>('');
   const [isPolling, setIsPolling] = useState(false);
-  const [pollTimer, setPollTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const pollerRef = useRef<PaymentPoller | null>(null);
+
+  const stopPolling = useCallback(() => {
+    pollerRef.current?.stopPolling();
+    pollerRef.current = null;
+    setIsPolling(false);
+  }, []);
+
+  // Stop polling when leaving the page.
+  useEffect(() => stopPolling, [stopPolling]);
 
   const lookupStatus = useCallback(async () => {
-    if (!paymentId.trim()) return;
+    const id = paymentId.trim();
+    if (!id) return;
     setLoading(true);
     setError('');
     setStatus(null);
 
     try {
-      const sablePay = SablePay.getInstance();
-      const resp = await sablePay.getPaymentStatus(paymentId.trim());
-      setStatus(resp);
+      setStatus(await SablePay.getInstance().getPaymentStatus(id));
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
   }, [paymentId]);
 
   const startPolling = useCallback(() => {
-    if (!paymentId.trim()) return;
+    const id = paymentId.trim();
+    if (!id) return;
+    stopPolling();
+    setError('');
+
+    const sablePay = SablePay.getInstance();
+    const poller = new PaymentPoller((pid) => sablePay.getPaymentStatus(pid));
+    pollerRef.current = poller;
     setIsPolling(true);
 
-    const poll = async () => {
-      try {
-        const sablePay = SablePay.getInstance();
-        const resp = await sablePay.getPaymentStatus(paymentId.trim());
-        setStatus(resp);
-
-        const s = resp.status?.toLowerCase() ?? '';
-        if (s === 'completed' || s === 'confirmed' || s === 'failed' || s === 'expired' || s === 'cancelled') {
-          setIsPolling(false);
-          return;
-        }
-
-        const timer = setTimeout(poll, 3000);
-        setPollTimer(timer);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setError(msg);
-        setIsPolling(false);
+    // Uses the SDK's default schedule: every 3s for 1 min, then backoff up to 10s,
+    // stopping automatically on a terminal status or after 10 minutes.
+    poller.startPolling(id, (result) => {
+      if (result.success && result.data) {
+        setStatus(result.data);
+        if (isTerminal(result.data.status)) stopPolling();
+      } else if (result.error) {
+        setError(result.error.message);
+        stopPolling();
       }
-    };
-    poll();
-  }, [paymentId]);
-
-  const stopPolling = () => {
-    if (pollTimer) clearTimeout(pollTimer);
-    setIsPolling(false);
-  };
-
-  const getStatusColor = (s: string | undefined): string => {
-    if (!s) return '';
-    const lower = s.toLowerCase();
-    if (lower === 'completed' || lower === 'confirmed') return 'success';
-    if (lower === 'failed' || lower === 'expired' || lower === 'cancelled') return 'error';
-    return 'warning';
-  };
+    });
+  }, [paymentId, stopPolling]);
 
   if (initError) {
     return <div className="config-warning">{initError}</div>;
   }
+
+  const currency = status?.currency_symbol || '$';
+  const rows: Array<[string, React.ReactNode, string?]> = status
+    ? [
+        ['Payment ID', status.paymentId],
+        ['Status', status.status, getStatusColor(status.status)],
+        ['Amount', status.amount != null ? `${currency}${status.amount}` : null],
+        ['Amount (USD)', status.amountUSD != null ? `$${status.amountUSD}` : null],
+        ['Paid Amount', status.paidAmount != null ? String(status.paidAmount) : null, 'success'],
+        ['Paid Token', status.paidToken],
+        ['Network', status.paidNetwork],
+        ['Transaction ID', status.transactionId],
+        ['Transaction Hash', status.txHash],
+        ['Terminal', status.terminalName ?? status.terminalId],
+        ['Created At', formatDate(status.createdAt)],
+        ['Completed At', formatDate(status.completedAt)],
+        ['Expires At', formatDate(status.expiresAt)],
+      ]
+    : [];
 
   return (
     <>
@@ -148,52 +175,14 @@ export default function PaymentStatusPage() {
 
           <div className="payment-result" style={{ marginBottom: 0 }}>
             <div className="status-details">
-              <div className="status-row">
-                <span className="label">Payment ID</span>
-                <span className="value">{status.paymentId}</span>
-              </div>
-              <div className="status-row">
-                <span className="label">Status</span>
-                <span className={`value ${getStatusColor(status.status)}`}>
-                  {status.status}
-                </span>
-              </div>
-              {status.amount !== undefined && (
-                <div className="status-row">
-                  <span className="label">Amount</span>
-                  <span className="value">${status.amount}</span>
-                </div>
-              )}
-              {/* {status.paidAmount !== undefined && (
-                <div className="status-row">
-                  <span className="label">Paid Amount</span>
-                  <span className="value success">${status.amount}</span>
-                </div>
-              )} */}
-              {status.paidToken && (
-                <div className="status-row">
-                  <span className="label">Paid Token</span>
-                  <span className="value">{status.paidToken}</span>
-                </div>
-              )}
-              {status.txHash && (
-                <div className="status-row">
-                  <span className="label">Transaction Hash</span>
-                  <span className="value">{status.txHash}</span>
-                </div>
-              )}
-              {status.expiresAt && (
-                <div className="status-row">
-                  <span className="label">Expires At</span>
-                  <span className="value">{new Date(status.expiresAt).toLocaleString()}</span>
-                </div>
-              )}
-              {status.createdAt && (
-                <div className="status-row">
-                  <span className="label">Created At</span>
-                  <span className="value">{new Date(status.createdAt).toLocaleString()}</span>
-                </div>
-              )}
+              {rows
+                .filter(([, value]) => value != null && value !== '')
+                .map(([label, value, color]) => (
+                  <div className="status-row" key={label}>
+                    <span className="label">{label}</span>
+                    <span className={`value ${color ?? ''}`}>{value}</span>
+                  </div>
+                ))}
             </div>
           </div>
         </div>
@@ -202,11 +191,11 @@ export default function PaymentStatusPage() {
       <div className="card">
         <h3 className="card-title">Status Lifecycle</h3>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.8 }}>
-          <strong>pending</strong> → <strong>processing</strong> → <strong>completed</strong> (success)
+          <strong>PENDING</strong> → <strong>COMPLETED</strong> (success)
           <br />
-          <strong>pending</strong> → <strong>expired</strong> (timed out)
+          <strong>PENDING</strong> → <strong>EXPIRED</strong> (timed out)
           <br />
-          <strong>pending</strong> → <strong>failed</strong> (error)
+          <strong>PENDING</strong> → <strong>FAILED</strong> (error)
         </p>
       </div>
     </>

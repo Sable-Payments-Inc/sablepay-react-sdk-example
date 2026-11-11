@@ -3,21 +3,16 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { SablePay } from '@sablepay/react-sablepay-js';
 
-interface SablePayConfig {
-  apiKey: string;
-  merchantId: string;
-  baseUrl: string;
-}
-
 interface SablePayContextValue {
   isInitialized: boolean;
-  config: SablePayConfig;
+  /** 'sandbox' | 'production' | 'unknown', derived by the SDK from the API key */
+  environment: string | null;
   error: string | null;
 }
 
 const SablePayContext = createContext<SablePayContextValue>({
   isInitialized: false,
-  config: { apiKey: '', merchantId: '', baseUrl: '' },
+  environment: null,
   error: null,
 });
 
@@ -27,53 +22,44 @@ export function useSablePayContext() {
 
 export function SablePayAppProvider({ children }: { children: ReactNode }) {
   const [isInitialized, setIsInitialized] = useState(false);
+  const [environment, setEnvironment] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const config: SablePayConfig = {
-    apiKey: process.env.PUBLIC_SABLEPAY_API_KEY || '',
-    merchantId: process.env.PUBLIC_SABLEPAY_MERCHANT_ID || '',
-    baseUrl: process.env.PUBLIC_SABLEPAY_BASE_URL || '',
-  };
+  const apiKey = process.env.NEXT_PUBLIC_SABLEPAY_API_KEY || '';
+  const merchantId = process.env.NEXT_PUBLIC_SABLEPAY_MERCHANT_ID || '';
 
   useEffect(() => {
-    if (!config.apiKey || !config.merchantId || !config.baseUrl) {
+    if (!apiKey || !merchantId) {
       setError(
-        'Missing configuration. Please create a .env.local file with  PUBLIC_SABLEPAY_API_KEY, PUBLIC_SABLEPAY_MERCHANT_ID, and PUBLIC_SABLEPAY_BASE_URL.'
+        'Missing configuration. Please create a .env.local file with NEXT_PUBLIC_SABLEPAY_API_KEY and NEXT_PUBLIC_SABLEPAY_MERCHANT_ID.'
       );
       return;
     }
 
     try {
-      // Use the local proxy to avoid CORS — /api/proxy/ is rewritten to the
-      // real backend by next.config.js rewrites.
-      const proxyBaseUrl =
-        typeof window !== 'undefined'
-          ? `${window.location.origin}/api/proxy/`
-          : config.baseUrl;
-
+      // Route API calls through the same-origin proxy to avoid CORS.
+      // next.config.js rewrites /api/proxy/* to the real SablePay API.
       SablePay.initialize({
-        apiKey: config.apiKey,
-        merchantId: config.merchantId,
-        baseUrl: proxyBaseUrl,
+        apiKey,
+        merchantId,
+        baseUrl: `${window.location.origin}/api/proxy/`,
+        enableLogging: process.env.NODE_ENV === 'development',
       });
       setIsInitialized(true);
-      console.log('[SablePay] Initialized —', SablePay.getInstance().getEnvironment());
+      setEnvironment(SablePay.getInstance().getEnvironment());
+      setError(null);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(`Initialization failed: ${message}`);
+      setError(`Initialization failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     return () => {
-      try {
-        SablePay.release();
-      } catch (_) {
-        // ignore if already released
-      }
+      SablePay.release();
+      setIsInitialized(false);
     };
-  }, [config.apiKey, config.merchantId, config.baseUrl]);
+  }, [apiKey, merchantId]);
 
   return (
-    <SablePayContext.Provider value={{ isInitialized, config, error }}>
+    <SablePayContext.Provider value={{ isInitialized, environment, error }}>
       {children}
     </SablePayContext.Provider>
   );
